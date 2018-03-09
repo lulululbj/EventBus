@@ -46,6 +46,7 @@ public class EventBus {
     private static final EventBusBuilder DEFAULT_BUILDER = new EventBusBuilder();
     private static final Map<Class<?>, List<Class<?>>> eventTypesCache = new HashMap<>();
 
+    // Map集合，key是事件的类，value是该事件的所有的订阅者以及处理该事件的回调方法的集合
     private final Map<Class<?>, CopyOnWriteArrayList<Subscription>> subscriptionsByEventType;
     private final Map<Object, List<Class<?>>> typesBySubscriber;
     private final Map<Class<?>, Object> stickyEvents;
@@ -110,14 +111,18 @@ public class EventBus {
 
     EventBus(EventBusBuilder builder) {
         logger = builder.getLogger();
+        // Map集合，key是事件的类，value是该事件的所有的订阅者以及处理该事件的回调方法的集合
         subscriptionsByEventType = new HashMap<>();
+        // Map集合，key是订阅者对象，value是该订阅者订阅的事件类型集合
         typesBySubscriber = new HashMap<>();
+        // 粘性事件集合
         stickyEvents = new ConcurrentHashMap<>();
         mainThreadSupport = builder.getMainThreadSupport();
         mainThreadPoster = mainThreadSupport != null ? mainThreadSupport.createPoster(this) : null;
         backgroundPoster = new BackgroundPoster(this);
         asyncPoster = new AsyncPoster(this);
         indexCount = builder.subscriberInfoIndexes != null ? builder.subscriberInfoIndexes.size() : 0;
+        // 订阅方法查找类
         subscriberMethodFinder = new SubscriberMethodFinder(builder.subscriberInfoIndexes,
                 builder.strictMethodVerification, builder.ignoreGeneratedIndex);
         logSubscriberExceptions = builder.logSubscriberExceptions;
@@ -125,6 +130,7 @@ public class EventBus {
         sendSubscriberExceptionEvent = builder.sendSubscriberExceptionEvent;
         sendNoSubscriberEvent = builder.sendNoSubscriberEvent;
         throwSubscriberException = builder.throwSubscriberException;
+        // 是否支持事件继承
         eventInheritance = builder.eventInheritance;
         executorService = builder.executorService;
     }
@@ -138,19 +144,24 @@ public class EventBus {
      * ThreadMode} and priority.
      */
     public void register(Object subscriber) {
+        // 获取订阅者的class对象
         Class<?> subscriberClass = subscriber.getClass();
+        // 查找订阅者所有的回调方法
         List<SubscriberMethod> subscriberMethods = subscriberMethodFinder.findSubscriberMethods(subscriberClass);
         synchronized (this) {
             for (SubscriberMethod subscriberMethod : subscriberMethods) {
+                // 订阅
                 subscribe(subscriber, subscriberMethod);
             }
         }
     }
 
     // Must be called in synchronized block
+    // 必须在同步代码块中执行
     private void subscribe(Object subscriber, SubscriberMethod subscriberMethod) {
-        Class<?> eventType = subscriberMethod.eventType;
+        Class<?> eventType = subscriberMethod.eventType;// 订阅的事件类型
         Subscription newSubscription = new Subscription(subscriber, subscriberMethod);
+        // 判断 subscriptionsByEventType 中是否添加过该事件类型，未添加则添加，已添加，报错
         CopyOnWriteArrayList<Subscription> subscriptions = subscriptionsByEventType.get(eventType);
         if (subscriptions == null) {
             subscriptions = new CopyOnWriteArrayList<>();
@@ -162,6 +173,7 @@ public class EventBus {
             }
         }
 
+        // 根据优先级priority添加newSubscription
         int size = subscriptions.size();
         for (int i = 0; i <= size; i++) {
             if (i == size || subscriberMethod.priority > subscriptions.get(i).subscriberMethod.priority) {
@@ -177,6 +189,7 @@ public class EventBus {
         }
         subscribedEvents.add(eventType);
 
+        // 黏性事件，立即post
         if (subscriberMethod.sticky) {
             if (eventInheritance) {
                 // Existing sticky events of all subclasses of eventType have to be considered.
@@ -239,6 +252,7 @@ public class EventBus {
 
     /** Unregisters the given subscriber from all event classes. */
     public synchronized void unregister(Object subscriber) {
+        // 获取该订阅者订阅的所有事件类型
         List<Class<?>> subscribedTypes = typesBySubscriber.get(subscriber);
         if (subscribedTypes != null) {
             for (Class<?> eventType : subscribedTypes) {
@@ -252,7 +266,9 @@ public class EventBus {
 
     /** Posts the given event to the event bus. */
     public void post(Object event) {
+        // 获取当前线程的posting状态
         PostingThreadState postingState = currentPostingThreadState.get();
+        // 获取当前线程的事件队列
         List<Object> eventQueue = postingState.eventQueue;
         eventQueue.add(event);
 
@@ -378,7 +394,7 @@ public class EventBus {
     private void postSingleEvent(Object event, PostingThreadState postingState) throws Error {
         Class<?> eventClass = event.getClass();
         boolean subscriptionFound = false;
-        if (eventInheritance) {
+        if (eventInheritance) { //是否触发订阅了该事件(eventClass)的父类,以及接口的类的响应方法.
             List<Class<?>> eventTypes = lookupAllEventTypes(eventClass);
             int countTypes = eventTypes.size();
             for (int h = 0; h < countTypes; h++) {
@@ -386,6 +402,7 @@ public class EventBus {
                 subscriptionFound |= postSingleEventForEventType(event, postingState, clazz);
             }
         } else {
+            // 发送单个事件
             subscriptionFound = postSingleEventForEventType(event, postingState, eventClass);
         }
         if (!subscriptionFound) {
@@ -394,7 +411,7 @@ public class EventBus {
             }
             if (sendNoSubscriberEvent && eventClass != NoSubscriberEvent.class &&
                     eventClass != SubscriberExceptionEvent.class) {
-                post(new NoSubscriberEvent(this, event));
+                post(new NoSubscriberEvent(this, event)); // 发送了未被订阅的事件
             }
         }
     }
@@ -402,6 +419,7 @@ public class EventBus {
     private boolean postSingleEventForEventType(Object event, PostingThreadState postingState, Class<?> eventClass) {
         CopyOnWriteArrayList<Subscription> subscriptions;
         synchronized (this) {
+            // 获取订阅了该事件的Subscription
             subscriptions = subscriptionsByEventType.get(eventClass);
         }
         if (subscriptions != null && !subscriptions.isEmpty()) {
@@ -410,6 +428,7 @@ public class EventBus {
                 postingState.subscription = subscription;
                 boolean aborted = false;
                 try {
+                    // 发送事件
                     postToSubscription(subscription, event, postingState.isMainThread);
                     aborted = postingState.canceled;
                 } finally {
